@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lucid-decoders"
+version = "0.1.0"
+description = "Attention-based hallucination detection for neural machine translation."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+  { name = "Mohit Krishna Arumalla" }
+]
+dependencies = [
+  "numpy>=1.26",
+  "pandas>=2.0",
+  "pyarrow>=15.0",
+  "scikit-learn>=1.4",
+  "torch>=2.2",
+  "transformers>=4.40",
+  "datasets>=2.18",
+  "matplotlib>=3.8",
+  "seaborn>=0.13",
+  "tqdm>=4.66",
+]
+
+[project.scripts]
+lucid-preprocess = "lucid_decoders.data.preprocess:main"
+lucid-extract-mbart = "lucid_decoders.models.mbart_attention:main"
+lucid-train-token = "lucid_decoders.train.train_token_classifier:main"
+lucid-train-sentence = "lucid_decoders.train.train_sentence_classifier:main"
+lucid-eval-token = "lucid_decoders.eval.evaluate_token:main"
+lucid-eval-sentence = "lucid_decoders.eval.evaluate_sentence:main"
+lucid-plot-attention = "lucid_decoders.analysis.plot_attention:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
