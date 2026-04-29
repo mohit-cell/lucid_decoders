@@ -67,6 +67,15 @@ python -m lucid_decoders.data.preprocess \
   --language-pair en-de
 ```
 
+Prepare the cloned WMT22/WMT23 `en-de` datasets:
+
+```bash
+python -m lucid_decoders.data.prepare_ende \
+  --wmt22-root data/raw/wmt22 \
+  --wmt23-root data/raw/wmt23 \
+  --output-dir data/processed/en_de
+```
+
 Extract `mBART` features:
 
 ```bash

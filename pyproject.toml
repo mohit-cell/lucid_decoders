@@ -27,6 +27,7 @@ dependencies = [
 
 [project.scripts]
 lucid-preprocess = "lucid_decoders.data.preprocess:main"
+lucid-prepare-ende = "lucid_decoders.data.prepare_ende:main"
 lucid-extract-mbart = "lucid_decoders.models.mbart_attention:main"
 lucid-train-token = "lucid_decoders.train.train_token_classifier:main"
 lucid-train-sentence = "lucid_decoders.train.train_sentence_classifier:main"
@@ -39,4 +40,3 @@ package-dir = { "" = "src" }
 
 [tool.setuptools.packages.find]
 where = ["src"]
-
