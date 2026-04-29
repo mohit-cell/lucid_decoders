@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -22,7 +21,7 @@ class MBartAttentionExtractor:
         self.transformers = self._import_transformers()
         self.device = self._resolve_device(config.device)
         self.tokenizer = self.transformers.AutoTokenizer.from_pretrained(config.model_name)
-        self.model = self.transformers.AutoModelForSeq2SeqLM.from_pretrained(config.model_name)
+        self.model = self._load_model()
         self.model.to(self.device)
         self.model.eval()
         self._set_language_codes()
@@ -51,6 +50,23 @@ class MBartAttentionExtractor:
         if self.torch.cuda.is_available():
             return self.torch.device("cuda")
         return self.torch.device("cpu")
+
+    def _load_model(self) -> Any:
+        load_kwargs = {"attn_implementation": "eager"}
+        try:
+            model = self.transformers.AutoModelForSeq2SeqLM.from_pretrained(
+                self.config.model_name,
+                **load_kwargs,
+            )
+        except TypeError:
+            # Older transformers versions do not accept `attn_implementation` in from_pretrained.
+            model = self.transformers.AutoModelForSeq2SeqLM.from_pretrained(self.config.model_name)
+            if hasattr(model, "config") and hasattr(model.config, "_attn_implementation"):
+                model.config._attn_implementation = "eager"
+        else:
+            if hasattr(model, "config") and hasattr(model.config, "_attn_implementation"):
+                model.config._attn_implementation = "eager"
+        return model
 
     def _set_language_codes(self) -> None:
         if hasattr(self.tokenizer, "src_lang"):
@@ -125,6 +141,12 @@ class MBartAttentionExtractor:
                 )
 
     def _stack_attentions(self, attention_layers: Any) -> np.ndarray:
+        if attention_layers is None:
+            raise RuntimeError(
+                "Attention tensors were not returned by the model. "
+                "Use an attention backend that supports `output_attentions=True`, "
+                "such as `attn_implementation='eager'`."
+            )
         layer_arrays = [layer[0].detach().cpu().numpy() for layer in attention_layers]
         return np.stack(layer_arrays, axis=0)
 
@@ -228,4 +250,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
