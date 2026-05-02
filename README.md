@@ -83,6 +83,7 @@ python -m lucid_decoders.models.mbart_attention \
   --input data/processed/wmt22_normalized.jsonl \
   --token-output data/processed/token_features.parquet \
   --sentence-output data/processed/sentence_features.parquet \
+  --sentence-head-output data/processed/sentence_head_features.parquet \
   --model-name facebook/mbart-large-50-many-to-many-mmt \
   --source-lang en_XX \
   --target-lang de_DE
@@ -105,6 +106,17 @@ python -m lucid_decoders.train.train_sentence_classifier \
   --artifacts-dir artifacts/sentence_logreg \
   --model-type logistic_regression
 ```
+
+Train one sentence-level classifier for each decoder `(layer, head)`:
+
+```bash
+python -m lucid_decoders.train.train_sentence_head_classifier \
+  --features data/processed/sentence_head_features.parquet \
+  --artifacts-dir artifacts/sentence_head_logreg \
+  --model-type logistic_regression
+```
+
+The head-level command writes `head_metrics.csv`, ranked by validation performance. Each classifier predicts whole-sentence hallucination from the attention features of one decoder layer/head.
 
 ## Notes
 

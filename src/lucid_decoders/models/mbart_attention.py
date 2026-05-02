@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 
 from lucid_decoders.config import FeatureConfig, MBartConfig
+from lucid_decoders.features.sentence_head_features import build_sentence_head_feature_rows
 from lucid_decoders.features.sentence_features import build_sentence_feature_frame
 from lucid_decoders.features.token_features import build_token_feature_rows
 from lucid_decoders.io import read_jsonl, write_table
@@ -209,6 +210,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--input", required=True, help="Normalized JSONL from the preprocessing step.")
     parser.add_argument("--token-output", required=True, help="Path to token-level feature table.")
     parser.add_argument("--sentence-output", required=True, help="Path to sentence-level feature table.")
+    parser.add_argument(
+        "--sentence-head-output",
+        help="Optional path to sentence-level feature rows grouped by decoder layer/head.",
+    )
     parser.add_argument("--model-name", default="facebook/mbart-large-50-many-to-many-mmt")
     parser.add_argument("--source-lang", required=True)
     parser.add_argument("--target-lang", required=True)
@@ -238,14 +243,19 @@ def main() -> None:
         examples = examples[: args.max_examples]
 
     token_rows: list[dict[str, Any]] = []
+    sentence_head_rows: list[dict[str, Any]] = []
     for example in examples:
         extraction = extractor.extract(example)
         token_rows.extend(build_token_feature_rows(extraction, feature_config))
+        if args.sentence_head_output:
+            sentence_head_rows.extend(build_sentence_head_feature_rows(extraction, feature_config))
 
     token_frame = pd.DataFrame(token_rows)
     sentence_frame = build_sentence_feature_frame(token_frame)
     write_table(token_frame, args.token_output)
     write_table(sentence_frame, args.sentence_output)
+    if args.sentence_head_output:
+        write_table(pd.DataFrame(sentence_head_rows), args.sentence_head_output)
 
 
 if __name__ == "__main__":

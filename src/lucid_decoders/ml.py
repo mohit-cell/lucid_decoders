@@ -22,6 +22,8 @@ META_COLUMNS = {
     "token_end_char",
     "token_label",
     "sentence_label",
+    "layer_id",
+    "head_id",
 }
 
 
@@ -160,4 +162,3 @@ def save_json(payload: dict[str, Any], path: str | Path) -> None:
     output_path = ensure_parent_dir(path)
     with output_path.open("w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2, sort_keys=True)
-
