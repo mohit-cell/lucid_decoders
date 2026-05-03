@@ -25,10 +25,19 @@ dependencies = [
   "tqdm>=4.66",
 ]
 
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+]
+
 [project.scripts]
 lucid-preprocess = "lucid_decoders.data.preprocess:main"
 lucid-prepare-ende = "lucid_decoders.data.prepare_ende:main"
+lucid-sample-ende = "lucid_decoders.data.sample_ende:main"
+lucid-validate-ende-data = "lucid_decoders.data.validate_ende:main"
 lucid-extract-mbart = "lucid_decoders.models.mbart_attention:main"
+lucid-extract-mbart-chunked = "lucid_decoders.models.mbart_attention_chunked:main"
+lucid-run-ende-pipeline = "lucid_decoders.pipeline:main"
 lucid-train-token = "lucid_decoders.train.train_token_classifier:main"
 lucid-train-sentence = "lucid_decoders.train.train_sentence_classifier:main"
 lucid-train-sentence-head = "lucid_decoders.train.train_sentence_head_classifier:main"
@@ -41,3 +50,7 @@ package-dir = { "" = "src" }
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

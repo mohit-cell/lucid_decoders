@@ -55,12 +55,14 @@ def build_sentence_head_feature_rows(
             }
             row.update(_summarize_metric_values(cross_metrics, "cross"))
             row.update(_summarize_metric_values(self_metrics, "self"))
-            row["self_to_cross_max_ratio_mean"] = row["self_max_mean"] / max(
-                row["cross_max_mean"],
+            row["self_to_cross_max_ratio_mean"] = _mean_ratio(
+                self_metrics["max"],
+                cross_metrics["max"],
                 feature_config.epsilon,
             )
-            row["self_to_cross_entropy_ratio_mean"] = row["self_entropy_mean"] / max(
-                row["cross_entropy_mean"],
+            row["self_to_cross_entropy_ratio_mean"] = _mean_ratio(
+                self_metrics["entropy"],
+                cross_metrics["entropy"],
                 feature_config.epsilon,
             )
             rows.append(row)
@@ -107,3 +109,11 @@ def _summarize_metric_values(
         summary[f"{prefix}_{metric_name}_min"] = float(array.min())
         summary[f"{prefix}_{metric_name}_max"] = float(array.max())
     return summary
+
+
+def _mean_ratio(numerators: list[float], denominators: list[float], epsilon: float) -> float:
+    ratios = [
+        numerator / max(denominator, epsilon)
+        for numerator, denominator in zip(numerators, denominators)
+    ]
+    return float(np.asarray(ratios, dtype=float).mean())

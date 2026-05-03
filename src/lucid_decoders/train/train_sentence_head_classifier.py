@@ -7,10 +7,12 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from lucid_decoders.features.contracts import validate_feature_frame
 from lucid_decoders.io import read_table, write_table
 from lucid_decoders.ml import (
     binary_classification_metrics,
     build_estimator,
+    empty_binary_classification_metrics,
     get_default_feature_columns,
     predict_positive_proba,
     save_json,
@@ -43,12 +45,19 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=20,
         help="Skip heads with fewer labeled training examples.",
     )
+    parser.add_argument(
+        "--n-jobs",
+        type=int,
+        default=1,
+        help="Number of layer/head classifiers to train concurrently.",
+    )
     return parser
 
 
 def main() -> None:
     args = build_arg_parser().parse_args()
     frame = read_table(args.features)
+    validate_feature_frame(frame, "sentence_head")
     frame = frame[frame[args.label_col].notna()].copy()
     required_cols = {"split", "layer_id", "head_id", args.label_col}
     missing = required_cols - set(frame.columns)
@@ -67,64 +76,47 @@ def main() -> None:
     metric_rows: list[dict[str, Any]] = []
     prediction_frames: list[pd.DataFrame] = []
 
-    for (layer_id, head_id), group in frame.groupby(["layer_id", "head_id"], sort=True):
-        train_frame = group[group["split"] == "train"].copy()
-        val_frame = group[group["split"] == "validation"].copy()
-        test_frame = group[group["split"] == "test"].copy()
-        if len(train_frame) < args.min_train_examples:
-            continue
-        if train_frame[args.label_col].nunique() < 2:
-            continue
-
-        model = build_estimator(args.model_type, random_state=args.seed)
-        model.fit(train_frame[feature_cols], train_frame[args.label_col].astype(int))
-
-        if not val_frame.empty:
-            val_probs = predict_positive_proba(model, val_frame, feature_cols)
-            threshold = args.threshold if args.threshold is not None else tune_threshold(
-                val_frame[args.label_col].astype(int),
-                val_probs,
+    groups = list(frame.groupby(["layer_id", "head_id"], sort=True))
+    if args.n_jobs == 1:
+        results = [
+            train_one_head(
+                layer_id=layer_id,
+                head_id=head_id,
+                group=group,
+                feature_cols=feature_cols,
+                model_type=args.model_type,
+                label_col=args.label_col,
+                seed=args.seed,
+                threshold_arg=args.threshold,
+                min_train_examples=args.min_train_examples,
             )
-            val_metrics = binary_classification_metrics(
-                val_frame[args.label_col].astype(int),
-                val_probs,
-                threshold=threshold,
-            )
-        else:
-            threshold = args.threshold if args.threshold is not None else 0.5
-            val_metrics = empty_metrics(threshold)
+            for (layer_id, head_id), group in groups
+        ]
+    else:
+        from joblib import Parallel, delayed
 
-        if not test_frame.empty:
-            test_probs = predict_positive_proba(model, test_frame, feature_cols)
-            test_metrics = binary_classification_metrics(
-                test_frame[args.label_col].astype(int),
-                test_probs,
-                threshold=threshold,
+        results = Parallel(n_jobs=args.n_jobs, prefer="processes")(
+            delayed(train_one_head)(
+                layer_id=layer_id,
+                head_id=head_id,
+                group=group,
+                feature_cols=feature_cols,
+                model_type=args.model_type,
+                label_col=args.label_col,
+                seed=args.seed,
+                threshold_arg=args.threshold,
+                min_train_examples=args.min_train_examples,
             )
-            prediction_frame = test_frame[["example_id", args.label_col]].copy()
-            prediction_frame["layer_id"] = int(layer_id)
-            prediction_frame["head_id"] = int(head_id)
-            prediction_frame["sentence_score"] = test_probs
-            prediction_frame["sentence_pred"] = (test_probs >= threshold).astype(int)
-            prediction_frames.append(prediction_frame)
-        else:
-            test_metrics = empty_metrics(threshold)
-
-        train_positive_rate = float(train_frame[args.label_col].astype(int).mean())
-        metric_rows.append(
-            {
-                "layer_id": int(layer_id),
-                "head_id": int(head_id),
-                "train_examples": int(len(train_frame)),
-                "validation_examples": int(len(val_frame)),
-                "test_examples": int(len(test_frame)),
-                "train_positive_rate": train_positive_rate,
-                "threshold": float(threshold),
-                **prefix_metrics(val_metrics, "validation"),
-                **prefix_metrics(test_metrics, "test"),
-            }
+            for (layer_id, head_id), group in groups
         )
-        models[(int(layer_id), int(head_id))] = model
+
+    for result in results:
+        if result is None:
+            continue
+        metric_rows.append(result["metrics"])
+        models[result["head_key"]] = result["model"]
+        if result["predictions"] is not None:
+            prediction_frames.append(result["predictions"])
 
     if not metric_rows:
         raise ValueError(
@@ -164,15 +156,78 @@ def main() -> None:
     )
 
 
-def empty_metrics(threshold: float) -> dict[str, float | None]:
-    return {
-        "threshold": float(threshold),
-        "precision": None,
-        "recall": None,
-        "f1": None,
-        "roc_auc": None,
-    }
+def train_one_head(
+    *,
+    layer_id: int,
+    head_id: int,
+    group: pd.DataFrame,
+    feature_cols: list[str],
+    model_type: str,
+    label_col: str,
+    seed: int,
+    threshold_arg: float | None,
+    min_train_examples: int,
+) -> dict[str, Any] | None:
+    train_frame = group[group["split"] == "train"].copy()
+    val_frame = group[group["split"] == "validation"].copy()
+    test_frame = group[group["split"] == "test"].copy()
+    if len(train_frame) < min_train_examples:
+        return None
+    if train_frame[label_col].nunique() < 2:
+        return None
 
+    model = build_estimator(model_type, random_state=seed)
+    model.fit(train_frame[feature_cols], train_frame[label_col].astype(int))
+
+    if not val_frame.empty:
+        val_probs = predict_positive_proba(model, val_frame, feature_cols)
+        threshold = threshold_arg if threshold_arg is not None else tune_threshold(
+            val_frame[label_col].astype(int),
+            val_probs,
+        )
+        val_metrics = binary_classification_metrics(
+            val_frame[label_col].astype(int),
+            val_probs,
+            threshold=threshold,
+        )
+    else:
+        threshold = threshold_arg if threshold_arg is not None else 0.5
+        val_metrics = empty_binary_classification_metrics(threshold)
+
+    if not test_frame.empty:
+        test_probs = predict_positive_proba(model, test_frame, feature_cols)
+        test_metrics = binary_classification_metrics(
+            test_frame[label_col].astype(int),
+            test_probs,
+            threshold=threshold,
+        )
+        prediction_frame = test_frame[["example_id", label_col]].copy()
+        prediction_frame["layer_id"] = int(layer_id)
+        prediction_frame["head_id"] = int(head_id)
+        prediction_frame["sentence_score"] = test_probs
+        prediction_frame["sentence_pred"] = (test_probs >= threshold).astype(int)
+    else:
+        test_metrics = empty_binary_classification_metrics(threshold)
+        prediction_frame = None
+
+    train_positive_rate = float(train_frame[label_col].astype(int).mean())
+    metrics = {
+        "layer_id": int(layer_id),
+        "head_id": int(head_id),
+        "train_examples": int(len(train_frame)),
+        "validation_examples": int(len(val_frame)),
+        "test_examples": int(len(test_frame)),
+        "train_positive_rate": train_positive_rate,
+        "threshold": float(threshold),
+        **prefix_metrics(val_metrics, "validation"),
+        **prefix_metrics(test_metrics, "test"),
+    }
+    return {
+        "head_key": (int(layer_id), int(head_id)),
+        "metrics": metrics,
+        "model": model,
+        "predictions": prediction_frame,
+    }
 
 def prefix_metrics(metrics: dict[str, float | None], prefix: str) -> dict[str, float | None]:
     return {

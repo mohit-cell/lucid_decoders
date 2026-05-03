@@ -57,6 +57,7 @@ def get_default_feature_columns(
 def build_estimator(model_type: str, random_state: int = 13) -> Any:
     require_sklearn()
     from sklearn.ensemble import RandomForestClassifier
+    from sklearn.impute import SimpleImputer
     from sklearn.linear_model import LogisticRegression
     from sklearn.neural_network import MLPClassifier
     from sklearn.pipeline import Pipeline
@@ -65,6 +66,7 @@ def build_estimator(model_type: str, random_state: int = 13) -> Any:
     if model_type == "logistic_regression":
         return Pipeline(
             steps=[
+                ("imputer", SimpleImputer(strategy="median")),
                 ("scaler", StandardScaler()),
                 (
                     "classifier",
@@ -77,15 +79,24 @@ def build_estimator(model_type: str, random_state: int = 13) -> Any:
             ]
         )
     if model_type == "random_forest":
-        return RandomForestClassifier(
-            n_estimators=300,
-            class_weight="balanced",
-            random_state=random_state,
-            n_jobs=-1,
+        return Pipeline(
+            steps=[
+                ("imputer", SimpleImputer(strategy="median")),
+                (
+                    "classifier",
+                    RandomForestClassifier(
+                        n_estimators=300,
+                        class_weight="balanced",
+                        random_state=random_state,
+                        n_jobs=-1,
+                    ),
+                ),
+            ]
         )
     if model_type == "mlp":
         return Pipeline(
             steps=[
+                ("imputer", SimpleImputer(strategy="median")),
                 ("scaler", StandardScaler()),
                 (
                     "classifier",
@@ -101,6 +112,8 @@ def build_estimator(model_type: str, random_state: int = 13) -> Any:
 
 
 def predict_positive_proba(model: Any, frame: pd.DataFrame, feature_cols: list[str]) -> np.ndarray:
+    if frame.empty:
+        return np.asarray([], dtype=float)
     if hasattr(model, "predict_proba"):
         probs = model.predict_proba(frame[feature_cols])[:, 1]
         return np.asarray(probs, dtype=float)
@@ -113,6 +126,8 @@ def tune_threshold(y_true: pd.Series, probs: np.ndarray) -> float:
     require_sklearn()
     from sklearn.metrics import f1_score
 
+    if len(y_true) == 0:
+        return 0.5
     best_threshold = 0.5
     best_score = -1.0
     for threshold in np.linspace(0.05, 0.95, 19):
@@ -132,6 +147,8 @@ def binary_classification_metrics(
     require_sklearn()
     from sklearn.metrics import f1_score, precision_score, recall_score, roc_auc_score
 
+    if len(y_true) == 0:
+        return empty_binary_classification_metrics(threshold)
     preds = (probs >= threshold).astype(int)
     metrics: dict[str, float | None] = {
         "threshold": float(threshold),
@@ -145,6 +162,26 @@ def binary_classification_metrics(
     else:
         metrics["roc_auc"] = None
     return metrics
+
+
+def empty_binary_classification_metrics(threshold: float) -> dict[str, float | None]:
+    return {
+        "threshold": float(threshold),
+        "precision": None,
+        "recall": None,
+        "f1": None,
+        "roc_auc": None,
+    }
+
+
+def validate_training_frame(frame: pd.DataFrame, label_col: str, context: str) -> None:
+    if frame.empty:
+        raise ValueError(f"No labeled training rows found for {context}.")
+    labels = frame[label_col].dropna().astype(int)
+    if labels.nunique() < 2:
+        raise ValueError(
+            f"Training rows for {context} must contain both positive and negative labels."
+        )
 
 
 def save_pickle(obj: Any, path: str | Path) -> None:

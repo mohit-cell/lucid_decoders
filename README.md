@@ -1,125 +1,147 @@
 # lucid_decoders
 
-Attention-based hallucination detection for neural machine translation with:
+Attention-based hallucination detection for English-to-German machine translation.
 
-- `WMT22/WMT23` data ingestion
-- `mBART` attention extraction
-- token-level hallucination classification
-- sentence-level hallucination classification
-- qualitative attention heatmaps
+The pipeline normalizes WMT22/WMT23 en-de quality-estimation data, runs mBART with
+teacher-forced target translations and `output_attentions=True`, converts attention
+tensors into compact features, and trains:
 
-## Project Layout
-
-```text
-src/lucid_decoders/
-  data/          dataset loading and preprocessing
-  models/        mBART attention extraction
-  features/      token and sentence feature builders
-  train/         baseline training entrypoints
-  eval/          held-out evaluation entrypoints
-  analysis/      qualitative heatmaps
-tests/           small feature-pipeline tests
-data/
-  raw/           place WMT22/WMT23 files here
-  processed/     normalized examples and features
-artifacts/       saved models, metrics, and plots
-```
+- a token-level hallucination/error localization classifier
+- a sentence-level hallucination probability classifier
+- one sentence-level classifier per decoder `(layer, head)` for attention-head ranking
 
 ## Setup
 
-Create an environment and install the package:
-
 ```bash
-pip install -e .
+git submodule update --init --recursive
+python -m pip install -e ".[dev]"
+python -m pytest -q
 ```
 
-Core runtime dependencies:
+The raw data submodules point to:
 
-- `torch`
-- `transformers`
-- `datasets`
-- `scikit-learn`
-- `pandas`
-- `numpy`
+- `data/raw/wmt22`: `https://github.com/WMT-QE-Task/wmt-qe-2022-data.git`
+- `data/raw/wmt23`: `https://github.com/WMT-QE-Task/wmt-qe-2023-data.git`
 
-## Pipeline
-
-1. Normalize raw WMT files into a shared schema.
-2. Split data into train/validation/test.
-3. Run `mBART` with `output_attentions=True`.
-4. Convert attention tensors into token-level features.
-5. Aggregate token evidence into sentence-level features.
-6. Train token and sentence classifiers.
-7. Evaluate with ROC-AUC, F1, precision, and recall.
-8. Inspect representative attention heatmaps.
-
-## Example Commands
-
-Normalize raw examples:
+Validate the raw checkout before preprocessing:
 
 ```bash
-python -m lucid_decoders.data.preprocess \
-  --input data/raw/wmt22/train.jsonl \
-  --output data/processed/wmt22_normalized.jsonl \
-  --source-col source \
-  --target-col hypothesis \
-  --sentence-label-col label \
-  --language-pair en-de
+lucid-validate-ende-data \
+  --wmt22-root data/raw/wmt22 \
+  --wmt23-root data/raw/wmt23
 ```
 
-Prepare the cloned WMT22/WMT23 `en-de` datasets:
+## One-Command Pipeline
+
+Run the full pipeline:
 
 ```bash
-python -m lucid_decoders.data.prepare_ende \
+lucid-run-ende-pipeline \
+  --stage all \
+  --wmt22-root data/raw/wmt22 \
+  --wmt23-root data/raw/wmt23 \
+  --processed-dir data/processed/en_de \
+  --artifacts-dir artifacts/en_de \
+  --device cuda
+```
+
+Use `--device cpu` if GPU is unavailable. mBART extraction is the expensive stage.
+
+Run one stage at a time with `--stage prepare`, `--stage extract`,
+`--stage train-token`, `--stage train-sentence`, or `--stage train-heads`.
+
+## Manual Stage Commands
+
+Prepare normalized en-de JSONL files:
+
+```bash
+lucid-prepare-ende \
   --wmt22-root data/raw/wmt22 \
   --wmt23-root data/raw/wmt23 \
   --output-dir data/processed/en_de
 ```
 
-Extract `mBART` features:
+This writes both per-source files and canonical combined files:
+
+- `all_examples.jsonl`: all exported examples, including audit-only rows
+- `all_trainable.jsonl`: examples with source, translation, label, and split
+
+WMT23 hallucination gold rows currently lack source sentences in the raw repo; they are
+kept in `all_examples.jsonl` and excluded from `all_trainable.jsonl`.
+
+Extract mBART attention features:
 
 ```bash
-python -m lucid_decoders.models.mbart_attention \
-  --input data/processed/wmt22_normalized.jsonl \
-  --token-output data/processed/token_features.parquet \
-  --sentence-output data/processed/sentence_features.parquet \
-  --sentence-head-output data/processed/sentence_head_features.parquet \
+lucid-extract-mbart \
+  --input data/processed/en_de/all_trainable.jsonl \
+  --token-output data/processed/en_de/token_features.parquet \
+  --sentence-output data/processed/en_de/sentence_features.parquet \
+  --sentence-head-output data/processed/en_de/sentence_head_features.parquet \
   --model-name facebook/mbart-large-50-many-to-many-mmt \
   --source-lang en_XX \
-  --target-lang de_DE
+  --target-lang de_DE \
+  --device cuda \
+  --require-sentence-label \
+  --report-output data/processed/en_de/mbart_extraction_report.json
 ```
 
-Train token classifier:
+Train classifiers:
 
 ```bash
-python -m lucid_decoders.train.train_token_classifier \
-  --features data/processed/token_features.parquet \
-  --artifacts-dir artifacts/token_logreg \
-  --model-type logistic_regression
+lucid-train-token \
+  --features data/processed/en_de/token_features.parquet \
+  --artifacts-dir artifacts/en_de/token_classifier
+
+lucid-train-sentence \
+  --features data/processed/en_de/sentence_features.parquet \
+  --artifacts-dir artifacts/en_de/sentence_classifier
+
+lucid-train-sentence-head \
+  --features data/processed/en_de/sentence_head_features.parquet \
+  --artifacts-dir artifacts/en_de/sentence_head_classifier
 ```
 
-Train sentence classifier:
+## Output Tree
 
-```bash
-python -m lucid_decoders.train.train_sentence_classifier \
-  --features data/processed/sentence_features.parquet \
-  --artifacts-dir artifacts/sentence_logreg \
-  --model-type logistic_regression
+```text
+data/processed/en_de/
+  all_examples.jsonl
+  all_trainable.jsonl
+  token_features.parquet
+  sentence_features.parquet
+  sentence_head_features.parquet
+  mbart_extraction_report.json
+
+artifacts/en_de/
+  token_classifier/
+    model.pkl
+    metrics.json
+    test_predictions.parquet
+  sentence_classifier/
+    model.pkl
+    metrics.json
+    test_predictions.parquet
+  sentence_head_classifier/
+    models_by_head.pkl
+    metrics.json
+    head_metrics.csv
+    test_predictions.parquet
 ```
 
-Train one sentence-level classifier for each decoder `(layer, head)`:
+`head_metrics.csv` is sorted by validation performance and identifies the decoder
+attention heads most predictive of sentence-level hallucination/error labels.
 
-```bash
-python -m lucid_decoders.train.train_sentence_head_classifier \
-  --features data/processed/sentence_head_features.parquet \
-  --artifacts-dir artifacts/sentence_head_logreg \
-  --model-type logistic_regression
-```
+## Feature Contract
 
-The head-level command writes `head_metrics.csv`, ranked by validation performance. Each classifier predicts whole-sentence hallucination from the attention features of one decoder layer/head.
+Token rows contain pooled cross-attention and decoder self-attention statistics across
+layers and heads:
 
-## Notes
+- entropy, max, variance, and top-k mass
+- mean, std, min, and max summaries
+- `self_to_cross_max_ratio`
+- `self_to_cross_entropy_ratio`
+- token position and source/target lengths
 
-- `mBART` attention extraction is the expensive stage and should run on GPU.
-- The baseline classifiers can usually run on CPU once features are cached.
-- The WMT label format can differ between files, so the preprocessing CLI accepts explicit column mappings.
+Sentence rows aggregate token features across target tokens with mean, max, min, and
+std. Sentence-head rows aggregate each `(layer_id, head_id)` across target tokens and
+include per-token self-to-cross ratio means.
