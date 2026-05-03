@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from lucid_decoders.features.contracts import validate_feature_frame
 from lucid_decoders.io import read_table, write_table
 from lucid_decoders.ml import (
     binary_classification_metrics,
@@ -12,6 +13,7 @@ from lucid_decoders.ml import (
     save_json,
     save_pickle,
     tune_threshold,
+    validate_training_frame,
 )
 
 
@@ -33,6 +35,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = build_arg_parser().parse_args()
     frame = read_table(args.features)
+    validate_feature_frame(frame, "sentence")
     frame = frame[frame[args.label_col].notna()].copy()
     if "split" not in frame.columns:
         raise ValueError("Expected a `split` column in the feature table.")
@@ -40,16 +43,19 @@ def main() -> None:
     train_frame = frame[frame["split"] == "train"].copy()
     val_frame = frame[frame["split"] == "validation"].copy()
     test_frame = frame[frame["split"] == "test"].copy()
+    validate_training_frame(train_frame, args.label_col, "sentence classifier")
     feature_cols = get_default_feature_columns(frame, label_col=args.label_col)
 
     model = build_estimator(args.model_type, random_state=args.seed)
     model.fit(train_frame[feature_cols], train_frame[args.label_col].astype(int))
 
     val_probs = predict_positive_proba(model, val_frame, feature_cols)
-    threshold = args.threshold if args.threshold is not None else tune_threshold(
-        val_frame[args.label_col].astype(int),
-        val_probs,
-    )
+    if args.threshold is not None:
+        threshold = args.threshold
+    elif val_frame.empty:
+        threshold = 0.5
+    else:
+        threshold = tune_threshold(val_frame[args.label_col].astype(int), val_probs)
     val_metrics = binary_classification_metrics(
         val_frame[args.label_col].astype(int),
         val_probs,

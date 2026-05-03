@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 from typing import Any
 
@@ -8,6 +9,7 @@ import numpy as np
 import pandas as pd
 
 from lucid_decoders.config import FeatureConfig, MBartConfig
+from lucid_decoders.features.contracts import validate_feature_frame
 from lucid_decoders.features.sentence_head_features import build_sentence_head_feature_rows
 from lucid_decoders.features.sentence_features import build_sentence_feature_frame
 from lucid_decoders.features.token_features import build_token_feature_rows
@@ -82,13 +84,17 @@ class MBartAttentionExtractor:
         decoder_input_ids = self.model.prepare_decoder_input_ids_from_labels(labels=labels)
 
         with self.torch.no_grad():
-            outputs = self.model(
-                input_ids=source_batch["input_ids"].to(self.device),
-                attention_mask=source_batch["attention_mask"].to(self.device),
-                decoder_input_ids=decoder_input_ids.to(self.device),
-                output_attentions=True,
-                return_dict=True,
-            )
+            model_kwargs = {
+                "input_ids": source_batch["input_ids"].to(self.device),
+                "attention_mask": source_batch["attention_mask"].to(self.device),
+                "decoder_input_ids": decoder_input_ids.to(self.device),
+                "output_attentions": True,
+                "return_dict": True,
+            }
+            decoder_attention_mask = target_batch.get("attention_mask")
+            if decoder_attention_mask is not None:
+                model_kwargs["decoder_attention_mask"] = decoder_attention_mask.to(self.device)
+            outputs = self.model(**model_kwargs)
 
         cross_attentions = self._stack_attentions(outputs.cross_attentions)
         self_attentions = self._stack_attentions(outputs.decoder_attentions)
@@ -185,6 +191,8 @@ class MBartAttentionExtractor:
             )
 
         if not example.hallucination_spans:
+            if example.sentence_label == 0:
+                return [0] * target_length
             return None
 
         aligned = [0] * target_length
@@ -205,6 +213,22 @@ def load_examples(path: str | Path) -> list[TranslationExample]:
     return [TranslationExample.from_dict(record) for record in read_jsonl(path)]
 
 
+def validate_example_for_extraction(
+    example: TranslationExample,
+    require_sentence_label: bool = False,
+    require_token_labels: bool = False,
+) -> str | None:
+    if not example.source_text.strip():
+        return "empty_source_text"
+    if not example.hypothesis_text.strip():
+        return "empty_hypothesis_text"
+    if require_sentence_label and example.sentence_label is None:
+        return "missing_sentence_label"
+    if require_token_labels and example.token_labels is None and not example.hallucination_spans:
+        return "missing_token_supervision"
+    return None
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Extract mBART attention features from normalized examples.")
     parser.add_argument("--input", required=True, help="Normalized JSONL from the preprocessing step.")
@@ -222,6 +246,22 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--device")
     parser.add_argument("--topk", type=int, default=3)
     parser.add_argument("--max-examples", type=int)
+    parser.add_argument("--report-output", help="Optional JSON report with extraction counts and skipped rows.")
+    parser.add_argument(
+        "--fail-on-invalid",
+        action="store_true",
+        help="Raise an error instead of skipping invalid examples.",
+    )
+    parser.add_argument(
+        "--require-sentence-label",
+        action="store_true",
+        help="Skip/fail examples without sentence_label.",
+    )
+    parser.add_argument(
+        "--require-token-labels",
+        action="store_true",
+        help="Skip/fail examples without token labels or hallucination spans.",
+    )
     return parser
 
 
@@ -244,18 +284,49 @@ def main() -> None:
 
     token_rows: list[dict[str, Any]] = []
     sentence_head_rows: list[dict[str, Any]] = []
+    skipped_rows: list[dict[str, str]] = []
     for example in examples:
+        invalid_reason = validate_example_for_extraction(
+            example,
+            require_sentence_label=args.require_sentence_label,
+            require_token_labels=args.require_token_labels,
+        )
+        if invalid_reason:
+            skipped_rows.append({"example_id": example.example_id, "reason": invalid_reason})
+            if args.fail_on_invalid:
+                raise ValueError(f"Invalid example {example.example_id}: {invalid_reason}")
+            continue
         extraction = extractor.extract(example)
         token_rows.extend(build_token_feature_rows(extraction, feature_config))
         if args.sentence_head_output:
             sentence_head_rows.extend(build_sentence_head_feature_rows(extraction, feature_config))
 
+    if not token_rows:
+        raise ValueError("No token feature rows were produced. Check input examples and extraction filters.")
+
     token_frame = pd.DataFrame(token_rows)
     sentence_frame = build_sentence_feature_frame(token_frame)
+    validate_feature_frame(token_frame, "token")
+    validate_feature_frame(sentence_frame, "sentence")
     write_table(token_frame, args.token_output)
     write_table(sentence_frame, args.sentence_output)
     if args.sentence_head_output:
-        write_table(pd.DataFrame(sentence_head_rows), args.sentence_head_output)
+        sentence_head_frame = pd.DataFrame(sentence_head_rows)
+        validate_feature_frame(sentence_head_frame, "sentence_head")
+        write_table(sentence_head_frame, args.sentence_head_output)
+    if args.report_output:
+        report = {
+            "input": str(args.input),
+            "total_examples": len(examples),
+            "processed_examples": len({row["example_id"] for row in token_rows}),
+            "skipped_examples": len(skipped_rows),
+            "skipped": skipped_rows,
+            "token_rows": len(token_rows),
+            "sentence_rows": len(sentence_frame),
+            "sentence_head_rows": len(sentence_head_rows),
+        }
+        Path(args.report_output).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.report_output).write_text(json.dumps(report, indent=2), encoding="utf-8")
 
 
 if __name__ == "__main__":

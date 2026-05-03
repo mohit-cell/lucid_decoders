@@ -1,0 +1,7 @@
+[submodule "data/raw/wmt22"]
+	path = data/raw/wmt22
+	url = https://github.com/WMT-QE-Task/wmt-qe-2022-data.git
+
+[submodule "data/raw/wmt23"]
+	path = data/raw/wmt23
+	url = https://github.com/WMT-QE-Task/wmt-qe-2023-data.git

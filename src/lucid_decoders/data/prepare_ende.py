@@ -11,6 +11,7 @@ from typing import Any, Iterable
 
 import pandas as pd
 
+from lucid_decoders.data.validate_ende import raise_for_missing_data, validate_wmt_roots
 from lucid_decoders.io import write_jsonl
 from lucid_decoders.schemas import HallucinationSpan, TranslationExample
 
@@ -28,20 +29,44 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=0.0,
         help="Binary threshold for WMT22 sentence MQM z-score. label=1 if mean_zscore < threshold.",
     )
+    parser.add_argument(
+        "--skip-validation",
+        action="store_true",
+        help="Skip the raw-file validation check before preparing data.",
+    )
     return parser
 
 
 def main() -> None:
     args = build_arg_parser().parse_args()
-    wmt22_root = Path(args.wmt22_root)
-    wmt23_root = Path(args.wmt23_root)
-    output_dir = Path(args.output_dir)
+    if not args.skip_validation:
+        raise_for_missing_data(validate_wmt_roots(args.wmt22_root, args.wmt23_root))
+    summary = prepare_ende_datasets(
+        wmt22_root=args.wmt22_root,
+        wmt23_root=args.wmt23_root,
+        output_dir=args.output_dir,
+        mqm_threshold=args.mqm_threshold,
+    )
+    print(json.dumps(summary, indent=2))
+
+
+def prepare_ende_datasets(
+    wmt22_root: str | Path,
+    wmt23_root: str | Path,
+    output_dir: str | Path,
+    mqm_threshold: float = 0.0,
+) -> dict[str, Any]:
+    wmt22_root = Path(wmt22_root)
+    wmt23_root = Path(wmt23_root)
+    output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    sentence_examples = build_wmt22_sentence_examples(wmt22_root, mqm_threshold=args.mqm_threshold)
+    sentence_examples = build_wmt22_sentence_examples(wmt22_root, mqm_threshold=mqm_threshold)
     token_examples = build_wmt22_word_examples(wmt22_root)
     span_examples = build_wmt23_task2_examples(wmt23_root)
     hallucination_examples = build_wmt23_hallucination_gold_examples(wmt23_root)
+    all_examples = sentence_examples + token_examples + span_examples + hallucination_examples
+    trainable_examples = [example for example in all_examples if is_trainable_for_attention(example)]
 
     write_jsonl([example.to_dict() for example in sentence_examples], output_dir / "wmt22_ende_sentence_mqm.jsonl")
     write_jsonl([example.to_dict() for example in token_examples], output_dir / "wmt22_ende_word_mqm.jsonl")
@@ -50,19 +75,42 @@ def main() -> None:
         [example.to_dict() for example in hallucination_examples],
         output_dir / "wmt23_ende_hallucination_gold.jsonl",
     )
+    write_jsonl([example.to_dict() for example in all_examples], output_dir / "all_examples.jsonl")
+    write_jsonl([example.to_dict() for example in trainable_examples], output_dir / "all_trainable.jsonl")
 
     summary = {
         "wmt22_sentence_examples": len(sentence_examples),
         "wmt22_word_examples": len(token_examples),
         "wmt23_task2_examples": len(span_examples),
         "wmt23_hallucination_gold_examples": len(hallucination_examples),
+        "all_examples": len(all_examples),
+        "all_trainable_examples": len(trainable_examples),
         "output_dir": str(output_dir),
+        "outputs": {
+            "all_examples": str(output_dir / "all_examples.jsonl"),
+            "all_trainable": str(output_dir / "all_trainable.jsonl"),
+            "wmt22_sentence_mqm": str(output_dir / "wmt22_ende_sentence_mqm.jsonl"),
+            "wmt22_word_mqm": str(output_dir / "wmt22_ende_word_mqm.jsonl"),
+            "wmt23_task2": str(output_dir / "wmt23_ende_task2.jsonl"),
+            "wmt23_hallucination_gold": str(output_dir / "wmt23_ende_hallucination_gold.jsonl"),
+        },
         "notes": [
             "WMT23 hallucination gold examples do not include source sentences in the repo. "
-            "They are exported for inspection with empty source_text and missing_source=true."
+            "They are exported for inspection with empty source_text and missing_source=true, "
+            "but excluded from all_trainable.jsonl."
         ],
     }
-    print(json.dumps(summary, indent=2))
+    return summary
+
+
+def is_trainable_for_attention(example: TranslationExample) -> bool:
+    if not example.source_text.strip():
+        return False
+    if not example.hypothesis_text.strip():
+        return False
+    if example.sentence_label is None:
+        return False
+    return True
 
 
 def build_wmt22_sentence_examples(
@@ -240,11 +288,11 @@ def build_wmt23_task2_examples(wmt23_root: Path) -> list[TranslationExample]:
             continue
         grouped_rows: dict[tuple[str, str, str, str, str], list[dict[str, Any]]] = defaultdict(list)
         with path.open("r", encoding="utf-8", newline="") as handle:
-            for line in handle:
-                if not line.strip():
+            reader = csv.reader(handle, delimiter="\t", quoting=csv.QUOTE_NONE)
+            for parts in reader:
+                if not parts or not any(part.strip() for part in parts):
                     continue
-                parts = line.rstrip("\n").split("\t")
-                if len(parts) == 10 and parts[-1] == "":
+                if len(parts) == 10 and not parts[-1].strip():
                     parts = parts[:-1]
                 if len(parts) != 9:
                     raise ValueError(f"Unexpected column count in {path}: {len(parts)} -> {parts[:5]}")

@@ -45,8 +45,6 @@ def build_sentence_feature_frame(token_frame: pd.DataFrame) -> pd.DataFrame:
             row["token_score_mean"] = float(group["token_score"].mean())
             row["token_score_max"] = float(group["token_score"].max())
             row["token_score_fraction_ge_0_5"] = float((group["token_score"] >= 0.5).mean())
-        if "token_label" in group.columns and group["token_label"].notna().any():
-            row["token_positive_fraction"] = float(group["token_label"].fillna(0).mean())
         rows.append(row)
 
     return pd.DataFrame(rows)

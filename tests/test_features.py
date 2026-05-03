@@ -5,10 +5,13 @@ import unittest
 import numpy as np
 import pandas as pd
 
+from lucid_decoders.features.contracts import validate_feature_frame
 from lucid_decoders.features.sentence_head_features import build_sentence_head_feature_rows
 from lucid_decoders.features.sentence_features import build_sentence_feature_frame
 from lucid_decoders.features.token_features import build_token_feature_rows
+from lucid_decoders.models.mbart_attention import MBartAttentionExtractor
 from lucid_decoders.schemas import AttentionExtraction
+from lucid_decoders.schemas import TranslationExample
 
 
 class FeaturePipelineTests(unittest.TestCase):
@@ -96,6 +99,8 @@ class FeaturePipelineTests(unittest.TestCase):
         )
 
         rows = build_token_feature_rows(extraction)
+        validate_feature_frame(pd.DataFrame(rows), "token")
+        validate_feature_frame(build_sentence_feature_frame(pd.DataFrame(rows)), "sentence")
         self.assertEqual(len(rows), 2)
         self.assertEqual(rows[0]["token_text"], "John")
         self.assertEqual(rows[1]["token_text"], "came")
@@ -144,7 +149,7 @@ class FeaturePipelineTests(unittest.TestCase):
         row = sentence_frame.iloc[0]
         self.assertAlmostEqual(row["cross_entropy_mean_mean"], 0.5)
         self.assertAlmostEqual(row["self_entropy_mean_max"], 0.6)
-        self.assertAlmostEqual(row["token_positive_fraction"], 0.5)
+        self.assertNotIn("token_positive_fraction", sentence_frame.columns)
 
     def test_sentence_head_feature_builder_preserves_layer_head_identity(self) -> None:
         cross = np.array(
@@ -229,11 +234,26 @@ class FeaturePipelineTests(unittest.TestCase):
         )
 
         rows = build_sentence_head_feature_rows(extraction)
+        validate_feature_frame(pd.DataFrame(rows), "sentence_head")
         self.assertEqual(len(rows), 4)
         self.assertEqual({(row["layer_id"], row["head_id"]) for row in rows}, {(0, 0), (0, 1), (1, 0), (1, 1)})
         self.assertTrue(all(row["sentence_label"] == 1 for row in rows))
         self.assertIn("cross_entropy_mean", rows[0])
         self.assertIn("self_to_cross_entropy_ratio_mean", rows[0])
+
+    def test_negative_sentence_without_spans_aligns_all_zero_token_labels(self) -> None:
+        extractor = object.__new__(MBartAttentionExtractor)
+        labels = extractor._align_token_labels(
+            TranslationExample(
+                example_id="negative",
+                source_text="Hello",
+                hypothesis_text="Hallo",
+                sentence_label=0,
+            ),
+            target_offsets=[(0, 0), (0, 5), (0, 0)],
+            target_length=3,
+        )
+        self.assertEqual(labels, [0, 0, 0])
 
 
 if __name__ == "__main__":
