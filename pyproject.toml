@@ -44,6 +44,7 @@ lucid-train-sentence-head = "lucid_decoders.train.train_sentence_head_classifier
 lucid-eval-token = "lucid_decoders.eval.evaluate_token:main"
 lucid-eval-sentence = "lucid_decoders.eval.evaluate_sentence:main"
 lucid-plot-attention = "lucid_decoders.analysis.plot_attention:main"
+lucid-colab-recovery = "lucid_decoders.tools.colab_recovery:main"
 
 [tool.setuptools]
 package-dir = { "" = "src" }

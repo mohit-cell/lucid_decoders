@@ -50,6 +50,27 @@ Use `--device cpu` if GPU is unavailable. mBART extraction is the expensive stag
 Run one stage at a time with `--stage prepare`, `--stage extract`,
 `--stage train-token`, `--stage train-sentence`, or `--stage train-heads`.
 
+## Colab Runtime Recovery
+
+If Colab disconnects during full-data extraction, reconnect, remount Drive, reinstall
+the package, then inspect saved chunks:
+
+```python
+from google.colab import drive
+drive.mount("/content/drive")
+```
+
+```bash
+%cd /content/drive/MyDrive/NLP/NLP_Project/lucid_decoders
+!pip install -e .
+!lucid-colab-recovery
+```
+
+The recovery command prints how many chunk reports were saved under
+`data/processed/en_de_full_features/chunks`, whether merged Parquet outputs exist,
+and the exact `extract-chunked` command to rerun. Rerunning that command is safe:
+completed chunks are skipped because the pipeline uses resumable chunk reports.
+
 ## Manual Stage Commands
 
 Prepare normalized en-de JSONL files:
