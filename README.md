@@ -71,6 +71,36 @@ The recovery command prints how many chunk reports were saved under
 and the exact `extract-chunked` command to rerun. Rerunning that command is safe:
 completed chunks are skipped because the pipeline uses resumable chunk reports.
 
+## Kaggle 20k Runbook
+
+Kaggle runtime storage is temporary, so package outputs under `/kaggle/working`
+before using **Save Version**. After enabling a Kaggle GPU, clone and install:
+
+```bash
+%cd /kaggle/working
+!git clone https://github.com/mohit-cell/lucid_decoders.git
+%cd /kaggle/working/lucid_decoders
+!git checkout Mohit_dev
+!pip install -e .
+```
+
+Print the exact notebook cells for the 20k balanced extraction/training run:
+
+```bash
+!lucid-kaggle-20k --mode commands
+```
+
+Check progress or finished artifacts inside Kaggle:
+
+```bash
+!lucid-kaggle-20k --mode status
+```
+
+The generated runbook prepares WMT22/WMT23, samples a 20k balanced subset,
+runs chunked mBART extraction, trains logistic-regression token/sentence/head
+models first, and packages outputs into
+`/kaggle/working/lucid_decoders_kaggle_outputs`.
+
 ## Manual Stage Commands
 
 Prepare normalized en-de JSONL files:
