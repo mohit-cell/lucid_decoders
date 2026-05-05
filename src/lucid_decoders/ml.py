@@ -145,13 +145,14 @@ def binary_classification_metrics(
     threshold: float,
 ) -> dict[str, float | None]:
     require_sklearn()
-    from sklearn.metrics import f1_score, precision_score, recall_score, roc_auc_score
+    from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score, roc_auc_score
 
     if len(y_true) == 0:
         return empty_binary_classification_metrics(threshold)
     preds = (probs >= threshold).astype(int)
     metrics: dict[str, float | None] = {
         "threshold": float(threshold),
+        "accuracy": float(accuracy_score(y_true, preds)),
         "precision": float(precision_score(y_true, preds, zero_division=0)),
         "recall": float(recall_score(y_true, preds, zero_division=0)),
         "f1": float(f1_score(y_true, preds, zero_division=0)),
@@ -167,6 +168,7 @@ def binary_classification_metrics(
 def empty_binary_classification_metrics(threshold: float) -> dict[str, float | None]:
     return {
         "threshold": float(threshold),
+        "accuracy": None,
         "precision": None,
         "recall": None,
         "f1": None,
