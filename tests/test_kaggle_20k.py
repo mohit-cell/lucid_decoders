@@ -25,10 +25,10 @@ class Kaggle15kTests(unittest.TestCase):
         self.assertIn("--test-per-label 205", output)
         self.assertIn("--stage extract-chunked", output)
         self.assertIn("--stage train-heads", output)
-        self.assertIn("--max-examples 5000", output)
-        self.assertIn("--max-examples 10000", output)
         self.assertIn("--max-examples 15000", output)
-        self.assertIn("en_de_15k_chunks_checkpoint_5k.tar.gz", output)
+        self.assertNotIn("--max-examples 5000", output)
+        self.assertNotIn("--max-examples 10000", output)
+        self.assertNotIn("checkpoint", output.lower())
         self.assertIn("/kaggle/working/lucid_decoders_kaggle_outputs", output)
 
     def test_train_head_command_adds_parallel_jobs(self) -> None:
@@ -80,7 +80,6 @@ def build_config(repo_root: Path) -> KaggleRunConfig:
         validation_per_label=758,
         test_per_label=205,
         chunk_size=250,
-        checkpoint_every=5000,
         head_train_jobs=4,
     )
 

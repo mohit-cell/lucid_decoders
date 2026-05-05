@@ -103,9 +103,9 @@ Print recovery commands after a Kaggle reset:
 ```
 
 The generated runbook prepares WMT22/WMT23, samples a 15k balanced subset,
-runs chunked mBART extraction in 5k, 10k, and 15k stages, packages checkpoints
-after every 5k examples, trains logistic-regression token/sentence/head models
-first, and packages outputs into `/kaggle/working/lucid_decoders_kaggle_outputs`.
+runs one direct chunked mBART extraction over 15k examples, trains
+logistic-regression token/sentence/head models first, and packages outputs into
+`/kaggle/working/lucid_decoders_kaggle_outputs`.
 
 ## Manual Stage Commands
 
