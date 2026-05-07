@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 from typing import Any
 
@@ -8,7 +9,7 @@ import numpy as np
 import pandas as pd
 
 from lucid_decoders.features.contracts import validate_feature_frame
-from lucid_decoders.io import read_table, write_table
+from lucid_decoders.io import read_table, write_table_atomic
 from lucid_decoders.ml import (
     binary_classification_metrics,
     build_estimator,
@@ -51,6 +52,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=1,
         help="Number of layer/head classifiers to train concurrently.",
     )
+    parser.add_argument("--resume", action="store_true", help="Reuse completed per-head training outputs.")
+    parser.add_argument(
+        "--work-dir",
+        help="Directory for per-head recovery artifacts. Defaults to <artifacts-dir>/head_work.",
+    )
+    parser.add_argument(
+        "--persist-head-models",
+        choices=["best", "all", "none"],
+        default="best",
+        help="Persist only the best head model, every per-head model, or no head models.",
+    )
+    parser.add_argument("--stop-after-heads", type=int, help=argparse.SUPPRESS)
     return parser
 
 
@@ -71,15 +84,16 @@ def main() -> None:
     )
     artifacts_dir = Path(args.artifacts_dir)
     artifacts_dir.mkdir(parents=True, exist_ok=True)
-
-    models: dict[tuple[int, int], Any] = {}
-    metric_rows: list[dict[str, Any]] = []
-    prediction_frames: list[pd.DataFrame] = []
+    work_dir = Path(args.work_dir) if args.work_dir else artifacts_dir / "head_work"
+    work_dir.mkdir(parents=True, exist_ok=True)
+    estimator_n_jobs = 1 if args.model_type == "random_forest" and args.n_jobs != 1 else None
 
     groups = list(frame.groupby(["layer_id", "head_id"], sort=True))
     if args.n_jobs == 1:
-        results = [
-            train_one_head(
+        results = []
+        completed_count = 0
+        for (layer_id, head_id), group in groups:
+            result = train_or_resume_head(
                 layer_id=layer_id,
                 head_id=head_id,
                 group=group,
@@ -89,14 +103,23 @@ def main() -> None:
                 seed=args.seed,
                 threshold_arg=args.threshold,
                 min_train_examples=args.min_train_examples,
+                work_dir=work_dir,
+                resume=args.resume,
+                persist_model=args.persist_head_models == "all",
+                estimator_n_jobs=estimator_n_jobs,
             )
-            for (layer_id, head_id), group in groups
-        ]
+            results.append(result)
+            if result is not None:
+                completed_count += 1
+            if args.stop_after_heads is not None and completed_count >= args.stop_after_heads:
+                raise RuntimeError(f"Stopped after {completed_count} completed head classifiers.")
     else:
+        if args.stop_after_heads is not None:
+            raise ValueError("--stop-after-heads is only supported with --n-jobs 1.")
         from joblib import Parallel, delayed
 
         results = Parallel(n_jobs=args.n_jobs, prefer="processes")(
-            delayed(train_one_head)(
+            delayed(train_or_resume_head)(
                 layer_id=layer_id,
                 head_id=head_id,
                 group=group,
@@ -106,17 +129,31 @@ def main() -> None:
                 seed=args.seed,
                 threshold_arg=args.threshold,
                 min_train_examples=args.min_train_examples,
+                work_dir=work_dir,
+                resume=args.resume,
+                persist_model=args.persist_head_models == "all",
+                estimator_n_jobs=estimator_n_jobs,
             )
             for (layer_id, head_id), group in groups
         )
 
+    metric_rows: list[dict[str, Any]] = []
+    prediction_frames: list[pd.DataFrame] = []
+    model_manifest: list[dict[str, Any]] = []
     for result in results:
         if result is None:
             continue
         metric_rows.append(result["metrics"])
-        models[result["head_key"]] = result["model"]
-        if result["predictions"] is not None:
-            prediction_frames.append(result["predictions"])
+        if result.get("predictions_path"):
+            prediction_frames.append(pd.read_parquet(result["predictions_path"]))
+        if result.get("model_path"):
+            model_manifest.append(
+                {
+                    "layer_id": result["layer_id"],
+                    "head_id": result["head_id"],
+                    "model_path": result["model_path"],
+                }
+            )
 
     if not metric_rows:
         raise ValueError(
@@ -132,16 +169,46 @@ def main() -> None:
         na_position="last",
     )
 
-    save_pickle(models, artifacts_dir / "models_by_head.pkl")
-    write_table(metrics_frame, artifacts_dir / "head_metrics.csv")
+    write_table_atomic(metrics_frame, artifacts_dir / "head_metrics.csv")
     if prediction_frames:
-        write_table(pd.concat(prediction_frames, ignore_index=True), artifacts_dir / "test_predictions.parquet")
+        write_table_atomic(
+            pd.concat(prediction_frames, ignore_index=True),
+            artifacts_dir / "test_predictions.parquet",
+        )
+    best_model_path = None
+    if args.persist_head_models in {"best", "all"}:
+        best_layer_id = int(metrics_frame.iloc[0]["layer_id"])
+        best_head_id = int(metrics_frame.iloc[0]["head_id"])
+        best_group = frame[(frame["layer_id"] == best_layer_id) & (frame["head_id"] == best_head_id)]
+        best_model = fit_head_model(
+            group=best_group,
+            feature_cols=feature_cols,
+            model_type=args.model_type,
+            label_col=args.label_col,
+            seed=args.seed,
+            estimator_n_jobs=estimator_n_jobs,
+        )
+        best_model_path = artifacts_dir / "best_model.pkl"
+        save_pickle(best_model, best_model_path)
+        save_json(
+            {
+                "layer_id": best_layer_id,
+                "head_id": best_head_id,
+                "model_path": str(best_model_path),
+            },
+            artifacts_dir / "best_model_info.json",
+        )
+    if model_manifest:
+        save_json({"models": model_manifest}, artifacts_dir / "head_model_manifest.json")
     save_json(
         {
             "feature_columns": feature_cols,
             "model_type": args.model_type,
             "label_col": args.label_col,
-            "num_head_classifiers": len(models),
+            "num_head_classifiers": int(len(metrics_frame)),
+            "persist_head_models": args.persist_head_models,
+            "head_work_dir": str(work_dir),
+            "best_model_path": str(best_model_path) if best_model_path else None,
             "best_head": {
                 "layer_id": int(metrics_frame.iloc[0]["layer_id"]),
                 "head_id": int(metrics_frame.iloc[0]["head_id"]),
@@ -156,6 +223,118 @@ def main() -> None:
     )
 
 
+def train_or_resume_head(
+    *,
+    layer_id: int,
+    head_id: int,
+    group: pd.DataFrame,
+    feature_cols: list[str],
+    model_type: str,
+    label_col: str,
+    seed: int,
+    threshold_arg: float | None,
+    min_train_examples: int,
+    work_dir: Path,
+    resume: bool,
+    persist_model: bool,
+    estimator_n_jobs: int | None,
+) -> dict[str, Any] | None:
+    head_dir = build_head_dir(work_dir, int(layer_id), int(head_id))
+    result_path = head_dir / "result.json"
+    if resume:
+        completed = read_completed_head_result(result_path)
+        if completed is not None:
+            return completed
+
+    cleanup_temp_files(head_dir)
+    result = train_one_head(
+        layer_id=int(layer_id),
+        head_id=int(head_id),
+        group=group,
+        feature_cols=feature_cols,
+        model_type=model_type,
+        label_col=label_col,
+        seed=seed,
+        threshold_arg=threshold_arg,
+        min_train_examples=min_train_examples,
+        estimator_n_jobs=estimator_n_jobs,
+    )
+    if result is None:
+        return None
+
+    head_dir.mkdir(parents=True, exist_ok=True)
+    metrics_path = head_dir / "metrics.json"
+    predictions_path = head_dir / "test_predictions.parquet"
+    model_path = head_dir / "model.pkl" if persist_model else None
+
+    save_json(result["metrics"], metrics_path)
+    prediction_frame = result["predictions"]
+    prediction_rows = 0
+    if prediction_frame is not None:
+        prediction_rows = int(len(prediction_frame))
+        write_table_atomic(prediction_frame, predictions_path)
+    if model_path is not None:
+        save_pickle(result["model"], model_path)
+
+    completed = {
+        "status": "completed",
+        "layer_id": int(layer_id),
+        "head_id": int(head_id),
+        "metrics": result["metrics"],
+        "metrics_path": str(metrics_path),
+        "predictions_path": str(predictions_path) if prediction_frame is not None else None,
+        "prediction_rows": prediction_rows,
+        "model_path": str(model_path) if model_path is not None else None,
+    }
+    save_json(completed, result_path)
+    return completed
+
+
+def build_head_dir(work_dir: Path, layer_id: int, head_id: int) -> Path:
+    return work_dir / f"layer_{layer_id:02d}" / f"head_{head_id:02d}"
+
+
+def read_completed_head_result(path: Path) -> dict[str, Any] | None:
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None
+    if payload.get("status") != "completed":
+        return None
+    predictions_path = payload.get("predictions_path")
+    if predictions_path and not Path(predictions_path).exists():
+        return None
+    model_path = payload.get("model_path")
+    if model_path and not Path(model_path).exists():
+        return None
+    return payload
+
+
+def cleanup_temp_files(head_dir: Path) -> None:
+    if not head_dir.exists():
+        return
+    for temp_path in head_dir.rglob("*.tmp*"):
+        if temp_path.is_file():
+            temp_path.unlink()
+
+
+def fit_head_model(
+    *,
+    group: pd.DataFrame,
+    feature_cols: list[str],
+    model_type: str,
+    label_col: str,
+    seed: int,
+    estimator_n_jobs: int | None,
+) -> Any:
+    train_frame = group[group["split"] == "train"].copy()
+    model = build_estimator(model_type, random_state=seed, n_jobs=estimator_n_jobs)
+    model.fit(train_frame[feature_cols], train_frame[label_col].astype(int))
+    return model
+
+
 def train_one_head(
     *,
     layer_id: int,
@@ -167,6 +346,7 @@ def train_one_head(
     seed: int,
     threshold_arg: float | None,
     min_train_examples: int,
+    estimator_n_jobs: int | None = None,
 ) -> dict[str, Any] | None:
     train_frame = group[group["split"] == "train"].copy()
     val_frame = group[group["split"] == "validation"].copy()
@@ -176,7 +356,7 @@ def train_one_head(
     if train_frame[label_col].nunique() < 2:
         return None
 
-    model = build_estimator(model_type, random_state=seed)
+    model = build_estimator(model_type, random_state=seed, n_jobs=estimator_n_jobs)
     model.fit(train_frame[feature_cols], train_frame[label_col].astype(int))
 
     if not val_frame.empty:

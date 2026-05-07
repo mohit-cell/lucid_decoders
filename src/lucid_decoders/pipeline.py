@@ -48,6 +48,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--threshold", type=float)
     parser.add_argument("--min-train-examples", type=int, default=20)
     parser.add_argument("--head-train-jobs", type=int, default=1)
+    parser.add_argument(
+        "--persist-head-models",
+        choices=["best", "all", "none"],
+        default="best",
+        help="Persist only the best head model, every per-head model, or no head models.",
+    )
     return parser
 
 
@@ -220,6 +226,9 @@ def run_train_heads(args: argparse.Namespace, processed_dir: Path, artifacts_dir
         str(args.seed),
         "--min-train-examples",
         str(args.min_train_examples),
+        "--resume",
+        "--persist-head-models",
+        args.persist_head_models,
     ]
     if args.head_train_jobs != 1:
         command.extend(["--n-jobs", str(args.head_train_jobs)])

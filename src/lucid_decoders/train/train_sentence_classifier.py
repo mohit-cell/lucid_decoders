@@ -4,7 +4,7 @@ import argparse
 from pathlib import Path
 
 from lucid_decoders.features.contracts import validate_feature_frame
-from lucid_decoders.io import read_table, write_table
+from lucid_decoders.io import read_table, write_table_atomic
 from lucid_decoders.ml import (
     binary_classification_metrics,
     build_estimator,
@@ -86,7 +86,7 @@ def main() -> None:
     prediction_frame = test_frame[["example_id", args.label_col]].copy()
     prediction_frame["sentence_score"] = test_probs
     prediction_frame["sentence_pred"] = (test_probs >= threshold).astype(int)
-    write_table(prediction_frame, artifacts_dir / "test_predictions.parquet")
+    write_table_atomic(prediction_frame, artifacts_dir / "test_predictions.parquet")
 
 
 if __name__ == "__main__":

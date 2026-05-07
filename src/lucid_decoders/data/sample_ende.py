@@ -8,7 +8,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
-from lucid_decoders.io import read_jsonl, write_jsonl
+from lucid_decoders.io import read_jsonl, write_json_atomic, write_jsonl_atomic
 
 
 DEFAULT_COUNTS = {
@@ -51,10 +51,9 @@ def main() -> None:
         max_target_chars=args.max_target_chars,
         require_positive_token_supervision=not args.allow_positive_without_token_supervision,
     )
-    write_jsonl(selected, args.output)
+    write_jsonl_atomic(selected, args.output)
     if args.summary_output:
-        Path(args.summary_output).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.summary_output).write_text(json.dumps(summary, indent=2), encoding="utf-8")
+        write_json_atomic(summary, args.summary_output)
     print(json.dumps(summary, indent=2))
 
 

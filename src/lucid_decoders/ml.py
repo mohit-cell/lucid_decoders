@@ -8,7 +8,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from lucid_decoders.io import ensure_parent_dir
+from lucid_decoders.io import ensure_parent_dir, temporary_path, write_json_atomic
 
 META_COLUMNS = {
     "example_id",
@@ -54,7 +54,7 @@ def get_default_feature_columns(
     return sorted(numeric_cols)
 
 
-def build_estimator(model_type: str, random_state: int = 13) -> Any:
+def build_estimator(model_type: str, random_state: int = 13, n_jobs: int | None = None) -> Any:
     require_sklearn()
     from sklearn.ensemble import RandomForestClassifier
     from sklearn.impute import SimpleImputer
@@ -88,7 +88,7 @@ def build_estimator(model_type: str, random_state: int = 13) -> Any:
                         n_estimators=300,
                         class_weight="balanced",
                         random_state=random_state,
-                        n_jobs=-1,
+                        n_jobs=n_jobs if n_jobs is not None else -1,
                     ),
                 ),
             ]
@@ -186,8 +186,12 @@ def validate_training_frame(frame: pd.DataFrame, label_col: str, context: str) -
 
 def save_pickle(obj: Any, path: str | Path) -> None:
     output_path = ensure_parent_dir(path)
-    with output_path.open("wb") as handle:
+    temp_path = temporary_path(output_path)
+    if temp_path.exists():
+        temp_path.unlink()
+    with temp_path.open("wb") as handle:
         pickle.dump(obj, handle)
+    temp_path.replace(output_path)
 
 
 def load_pickle(path: str | Path) -> Any:
@@ -196,6 +200,4 @@ def load_pickle(path: str | Path) -> Any:
 
 
 def save_json(payload: dict[str, Any], path: str | Path) -> None:
-    output_path = ensure_parent_dir(path)
-    with output_path.open("w", encoding="utf-8") as handle:
-        json.dump(payload, handle, indent=2, sort_keys=True)
+    write_json_atomic(payload, path, sort_keys=True)
