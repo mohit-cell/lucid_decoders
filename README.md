@@ -167,9 +167,9 @@ Sentence rows aggregate token features across target tokens with mean, max, min,
 std. Sentence-head rows aggregate each `(layer_id, head_id)` across target tokens and
 include per-token self-to-cross ratio means.
 
-## Course Project Code And Demo Checklist
+## Project Code And Demo Checklist
 
-This section is written for the final CSE 538 code/demo grading checklist. The
+This section is written for the final CSE 538 code/demo. The
 source code is hosted at:
 
 - GitHub packaged-code link: <https://github.com/mohit-cell/lucid_decoders.git>
