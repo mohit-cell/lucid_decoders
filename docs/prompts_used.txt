@@ -1,0 +1,19 @@
+# Prompts Used
+
+The runnable Lucid Decoders system uses no prompt-based inference.
+
+The pipeline is deterministic apart from configured random seeds in sampling and
+model training. It normalizes WMT22/WMT23 English-German data, extracts
+teacher-forced mBART attention features, and trains supervised scikit-learn
+classifiers. No runtime prompt is sent to a language model when preprocessing,
+extracting features, training classifiers, evaluating outputs, or running the
+local recovery/status tools.
+
+Project-assistance prompts were used only during development to ask Codex to help
+plan, implement, run, analyze, and document the pipeline. Those prompts are not
+part of the executable system, are not required to reproduce any classifier
+output, and do not affect the generated metrics except through the tracked source
+code and documented commands.
+
+For grading and reproducibility, the relevant runnable commands are documented in
+README.md under "Course Project Code And Demo Checklist."
