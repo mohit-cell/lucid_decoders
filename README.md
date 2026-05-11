@@ -12,10 +12,27 @@ tensors into compact features, and trains:
 
 ## Setup
 
+For a fresh clone on macOS or Linux:
+
 ```bash
+git clone https://github.com/mohit-cell/lucid_decoders.git
+cd lucid_decoders
 git submodule update --init --recursive
+python -m venv .venv
+source .venv/bin/activate
 python -m pip install -e ".[dev]"
 python -m pytest -q
+```
+
+For a fresh clone on Windows PowerShell:
+
+```powershell
+git clone https://github.com/mohit-cell/lucid_decoders.git
+cd lucid_decoders
+git submodule update --init --recursive
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+.\.venv\Scripts\python.exe -m pytest -q
 ```
 
 The raw data submodules point to:
@@ -230,18 +247,11 @@ by behavior because their individual `test_*` functions are intentionally narrow
 | `tests/test_local_run_recovery.py` | Local run-state, heartbeat, stale-lock, and resume-command tests. |
 | `tests/test_sentence_head_recovery.py` | Per-head resume, incomplete-head retry, merged metrics, predictions, and `persist-head-models=best` tests. |
 
-### Setup, Training, Testing, and Demo Commands
+### Training, Testing, and Demo Commands
 
-Clone and install:
-
-```powershell
-git clone https://github.com/mohit-cell/lucid_decoders.git
-cd lucid_decoders
-git submodule update --init --recursive
-python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
-.\.venv\Scripts\python.exe -m pytest -q
-```
+Use the Setup section above to clone the repository, initialize submodules, create
+a virtual environment, install the package, and run tests. The commands below are
+PowerShell examples for validation, local demo runs, and artifact inspection.
 
 Validate and prepare the raw WMT data:
 
@@ -417,9 +427,11 @@ It is a deterministic data processing, mBART feature extraction, and supervised
 classifier-training pipeline. `docs/prompts_used.txt` documents this explicitly
 and summarizes project-assistance prompts for transparency.
 
-### Major Software Requirements
+### Observed 50k Run Environment
 
-The completed 50k local run used the following observed environment:
+The completed 50k local run used the following observed environment. These are
+not the minimum required versions; package minimums are defined in
+`pyproject.toml`.
 
 | Component | Version or value |
 | --- | --- |
